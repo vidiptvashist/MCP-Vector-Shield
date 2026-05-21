@@ -43,7 +43,7 @@ class MCPNeuralShield:
     """
     def __init__(
         self,
-        model_path: str = "shield_model.pt",
+        model_path: Optional[str] = None,
         threshold: float = 0.5,
         device: Optional[str] = None,
         cache_size: int = 1024
@@ -52,12 +52,21 @@ class MCPNeuralShield:
         Initializes the neural shield by loading the SentenceTransformer and the
         pre-trained PyTorch MLP classifier weights.
         
-        :param model_path: Path to the serialized classifier weights file (shield_model.pt).
+        :param model_path: Path to the serialized classifier weights file. If None, uses the bundled shield_model.pt.
         :param threshold: Classification probability boundary (default: 0.5).
         :param device: Hardware device target ('cuda', 'mps', 'cpu'). Auto-selects if None.
         :param cache_size: Max number of cached embeddings for sub-2ms repeat inference.
         """
         self.threshold = threshold
+
+        # Resolve the default model weights path (embedded inside the package)
+        if model_path is None:
+            package_dir = os.path.dirname(os.path.abspath(__file__))
+            model_path = os.path.join(package_dir, "shield_model.pt")
+            if not os.path.exists(model_path):
+                # Fallback to working directory for local development execution
+                model_path = "shield_model.pt"
+
 
         # 1. Determine device with fallback
         if device is None:

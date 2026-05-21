@@ -55,28 +55,30 @@ pip install ./dist/mcp_vector_shield-0.2.0-py3-none-any.whl
 
 #### Spawning Target Server:
 ```bash
-# Run any target MCP server command after the '--' token
-mcp-shield -m shield_model.pt -t 0.5 -- npx -y @modelcontextprotocol/server-github
+# The pre-trained model is bundled — no --model flag needed!
+mcp-shield -- npx -y @modelcontextprotocol/server-github
+
+# With custom threshold or block mode:
+mcp-shield -t 0.7 --block -- npx -y @modelcontextprotocol/server-github
+
+# With a custom-trained model:
+mcp-shield -m /path/to/custom_model.pt -- npx -y @modelcontextprotocol/server-github
 ```
 
 #### CLI Flags:
-- `--model`, `-m`: Path to the trained neural classifier weights file (default: `shield_model.pt`).
+- `--model`, `-m`: Path to a custom trained classifier weights file (default: **bundled model**, no path needed).
 - `--threshold`, `-t`: Classification probability boundary between `0.0` and `1.0` (default: `0.5`).
 - `--baseline`, `-b`: (Optional) Path to baseline tools JSON file to preserve legacy registry baseline mappings.
 - `--block`: Enable BLOCK mode (raise error response) instead of FILTER mode (strip tool).
 
 #### Editor Configuration (e.g., Cursor or Claude Desktop `mcpServers`):
-Simply swap your original server configuration command with the `mcp-shield` wrapper:
+Simply swap your original server configuration command with the `mcp-shield` wrapper. The bundled model loads automatically:
 ```json
 {
   "mcpServers": {
     "github-secure": {
       "command": "mcp-shield",
       "args": [
-        "--model",
-        "/absolute/path/to/shield_model.pt",
-        "--threshold",
-        "0.5",
         "--",
         "npx",
         "-y",
@@ -100,8 +102,8 @@ from mcp_vector_shield.mcp_classifier_engine import MCPNeuralShield
 # 1. Initialize server
 mcp = FastMCP("MySecureServer")
 
-# 2. Setup the neural shield (automatic quantization & LRU cache enabled)
-shield = MCPNeuralShield(model_path="shield_model.pt", threshold=0.5)
+# 2. Setup the neural shield (uses bundled model automatically)
+shield = MCPNeuralShield()  # or MCPNeuralShield(model_path="custom.pt") for a custom model
 
 # 3. Attach ShieldMiddleware (will strip malicious tools in filter mode)
 middleware = ShieldMiddleware(registry=shield, block_mode=False)

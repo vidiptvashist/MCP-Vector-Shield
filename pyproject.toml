@@ -56,6 +56,9 @@ mcp-shield-benchmark = "run_comprehensive_benchmark:main"
 [tool.setuptools]
 packages = ["mcp_vector_shield"]
 
+[tool.setuptools.package-data]
+mcp_vector_shield = ["shield_model.pt"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
 

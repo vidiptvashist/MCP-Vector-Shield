@@ -243,15 +243,16 @@ async def pipe_sub_stderr(reader: asyncio.StreamReader):
 
 async def run_proxy(
     cmd_args: List[str],
-    model_path: str,
-    threshold: float,
-    block_mode: bool,
+    model_path: str = None,
+    threshold: float = 0.5,
+    block_mode: bool = False,
     baseline_path: str = None,
 ):
     # 1. Initialize Neural Shield and blocked tools tracker
     from mcp_vector_shield.mcp_classifier_engine import MCPNeuralShield
 
-    logger.info(f"Initializing MCPNeuralShield (model: '{model_path}', threshold: {threshold})...")
+    model_display = model_path or '(bundled)'
+    logger.info(f"Initializing MCPNeuralShield (model: '{model_display}', threshold: {threshold})...")
     registry = MCPNeuralShield(model_path=model_path, threshold=threshold)
     blocked_tools = set()
 
@@ -313,8 +314,8 @@ def main():
     parser.add_argument(
         "--model",
         "-m",
-        default="shield_model.pt",
-        help="Path to trained neural classifier weights (default: shield_model.pt)",
+        default=None,
+        help="Path to trained neural classifier weights (default: bundled model)",
     )
     parser.add_argument(
         "--baseline",
@@ -354,7 +355,7 @@ def main():
             file=sys.stderr,
         )
         print(
-            "Example: mcp-shield -m shield_model.pt -- npx -y @modelcontextprotocol/server-github",
+            "Example: mcp-shield -- npx -y @modelcontextprotocol/server-github",
             file=sys.stderr,
         )
         sys.exit(1)

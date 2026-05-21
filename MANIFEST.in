@@ -1,6 +1,7 @@
 include README.md
 include LICENSE
 recursive-include mcp_vector_shield *.py
+include mcp_vector_shield/shield_model.pt
 global-exclude *.json
 global-exclude *.pyc
 global-exclude __pycache__
