@@ -38,56 +38,89 @@ pip install ./dist/mcp_vector_shield-0.1.0-py3-none-any.whl
 
 ## Usage
 
-### 1. Running the Reverse Proxy Server
+### 1. Universal Stdio Passthrough CLI (`mcp-shield`) [RECOMMENDED]
+`mcp-shield` serves as a zero-code, protocol-agnostic stdin/stdout reverse proxy. It intercepts standard JSON-RPC `tools/list` stdout streams from **any** target MCP server (written in TypeScript, Python, Go, Rust, etc.), filters out shadowed or malicious tools, and outputs clean streams back to the AI editor (e.g. Cursor, Windsurf, Claude Desktop).
 
-Vector Shield can run as a standalone reverse proxy in front of an existing MCP Server. Configure the environment variables and run it with `uvicorn`:
-
-#### Environment Variables
-- `MCP_UPSTREAM_URL`: The URL of the target MCP server to proxy (default: `http://localhost:8000`).
-- `MCP_BLOCK_MODE`: Set to `true` to block responses entirely when unsafe tools are detected (default: `false` / Filter mode).
-- `MCP_USE_HTTP_403`: Set to `true` if you want the block mode to return an HTTP 403 Forbidden status code instead of a JSON-RPC error payload (default: `false`).
-
-#### Start the Proxy
+#### Spawning Target Server:
 ```bash
-export MCP_UPSTREAM_URL="http://localhost:8001"
-export MCP_BLOCK_MODE="false"
+# Run any target MCP server command after the '--' token
+mcp-shield --baseline safe_baselines.json --threshold 0.05 -- npx -y @modelcontextprotocol/server-github
+```
 
-uvicorn mcp_vector_shield.proxy:app --host 127.0.0.1 --port 8080
+#### Editor Configuration (e.g., Cursor or Claude Desktop `mcpServers`):
+Simply swap your original server configuration command with the `mcp-shield` wrapper:
+```json
+{
+  "mcpServers": {
+    "github-secure": {
+      "command": "mcp-shield",
+      "args": [
+        "--baseline",
+        "/absolute/path/to/safe_baselines.json",
+        "--threshold",
+        "0.05",
+        "--",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ]
+    }
+  }
+}
 ```
 
 ---
 
-### 2. Mounting Middleware on a Custom FastAPI App
+### 2. Mounting Middleware on a Python `FastMCP` App
+If you are building your own custom MCP server in Python using `FastMCP`, you can integrate the native `ShieldMiddleware` directly into your server instance:
 
-You can plug the `MCPVectorShieldMiddleware` directly into your existing FastAPI backend:
+```python
+from mcp.server.fastmcp import FastMCP
+from mcp_vector_shield.middleware import ShieldMiddleware
+from mcp_vector_shield.mcp_registry import MCPSemanticRegistry
 
+# 1. Initialize server
+mcp = FastMCP("MySecureServer")
+
+# 2. Setup baseline registry
+registry = MCPSemanticRegistry(distance_threshold=0.05)
+registry.register_baseline({
+    "name": "calculator",
+    "description": "Performs basic arithmetic."
+})
+
+# 3. Attach ShieldMiddleware (will strip shadowed calculator tools in filter mode)
+middleware = ShieldMiddleware(registry=registry, block_mode=False)
+middleware.attach(mcp)
+
+@mcp.tool()
+def calculator(expression: str) -> str:
+    return "42"
+
+if __name__ == "__main__":
+    mcp.run()
+```
+
+---
+
+### 3. Mounting Middleware on a Legacy Custom FastAPI App (ASGI HTTP/SSE)
+For ASGI-based FastAPI HTTP or SSE integrations:
 ```python
 from fastapi import FastAPI
 from mcp_vector_shield.middleware import MCPVectorShieldMiddleware
 
 app = FastAPI()
 
-# Custom verification hook
-def my_verify_hook(tool_schema: dict) -> bool:
-    name = tool_schema.get("name", "")
-    description = tool_schema.get("description", "")
-    
-    # Custom rule: Reject tools with "delete" or "destroy" in name
-    if "delete" in name.lower() or "destroy" in name.lower():
-        return False
-    return True
-
-# Mount the middleware
 app.add_middleware(
     MCPVectorShieldMiddleware,
-    verify_hook=my_verify_hook,
     block_mode=False  # Strips malicious tools instead of blocking the whole response
 )
 ```
 
+
 ---
 
-### 3. Vector Semantic Registry & Shadowing Protection
+### 4. Vector Semantic Registry & Shadowing Protection
 
 The `MCPSemanticRegistry` utilizes SentenceTransformers (`all-MiniLM-L6-v2`) and a FAISS index to baseline your approved tools and block **shadowing attacks** (malicious revisions of known tools with identical names but semantically modified behaviors/descriptions).
 

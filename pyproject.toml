@@ -30,7 +30,8 @@ dependencies = [
     "numpy>=1.20.0",
     "torch>=1.12.0",
     "sentence-transformers>=2.2.0",
-    "faiss-cpu>=1.7.0"
+    "faiss-cpu>=1.7.0",
+    "mcp>=1.0.0"
 ]
 
 [project.optional-dependencies]
@@ -48,6 +49,7 @@ Repository = "https://github.com/vidiptvashist/mcp-vector-shield.git"
 "Bug Tracker" = "https://github.com/vidiptvashist/mcp-vector-shield/issues"
 
 [project.scripts]
+mcp-shield = "mcp_vector_shield.cli:main"
 mcp-shield-benchmark = "run_comprehensive_benchmark:main"
 
 [tool.setuptools]

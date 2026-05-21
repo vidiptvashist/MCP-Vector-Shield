@@ -1,9 +1,77 @@
 import json
 import codecs
 import logging
-from typing import Callable, Optional
+from typing import Callable, Optional, Any
 
 logger = logging.getLogger("mcp_vector_shield")
+
+
+class ShieldMiddleware:
+    """
+    Native MCP Middleware for the Python `FastMCP` framework.
+    Intercepts tools list definitions and validates them against the MCPSemanticRegistry
+    to block or filter out shadowing attacks (name-squatting, malicious revisions) in-flight.
+    """
+
+    def __init__(
+        self,
+        registry: Optional[Any] = None,
+        block_mode: bool = False,
+    ):
+        """
+        :param registry: An instance of `MCPSemanticRegistry`. If None, initializes a default instance.
+        :param block_mode: If True, raises an exception/error to block the entire tools/list request when an attack is found.
+                           If False, filters (strips) only the malicious tools and lets the safe ones through.
+        """
+        self.block_mode = block_mode
+        if registry is None:
+            from mcp_vector_shield.mcp_registry import MCPSemanticRegistry
+
+            self.registry = MCPSemanticRegistry(distance_threshold=0.05)
+        else:
+            self.registry = registry
+
+    def attach(self, mcp: Any) -> None:
+        """
+        Attach the middleware to a FastMCP server instance.
+        """
+        orig_list_tools = mcp.list_tools
+
+        async def wrapped_list_tools() -> list[Any]:
+            tools = await orig_list_tools()
+            filtered_tools = []
+            for tool in tools:
+                # Resolve the schema dictionary
+                # FastMCP list_tools returns a list of MCPTool / Tool objects
+                # which have attributes: name, description, inputSchema
+                tool_schema = {
+                    "name": getattr(tool, "name", ""),
+                    "description": getattr(tool, "description", "") or "",
+                    "inputSchema": getattr(tool, "inputSchema", {})
+                    or getattr(tool, "parameters", {})
+                    or {},
+                }
+
+                # Run shadowing attack detection using FAISS Registry
+                if self.registry.is_shadowing_attack(tool_schema):
+                    logger.warning(
+                        f"[ShieldMiddleware] Security Block: Tool '{tool.name}' is flagged as a SHADOWING ATTACK!"
+                    )
+                    if self.block_mode:
+                        raise ValueError(
+                            f"Access Denied: Unsafe shadow tool modification detected on '{tool.name}'."
+                        )
+                    continue
+
+                filtered_tools.append(tool)
+            return filtered_tools
+
+        # Wrap list_tools method on the FastMCP instance
+        mcp.list_tools = wrapped_list_tools
+
+        # Re-register the handler on the underlying protocol server
+        if hasattr(mcp, "_mcp_server"):
+            mcp._mcp_server.list_tools()(wrapped_list_tools)
 
 
 class MCPVectorShieldMiddleware:
