@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-vector-shield"
-version = "0.1.2"
+version = "0.1.4"
 description = "A semantic-registry proxy and ASGI middleware for protecting Model Context Protocol (MCP) servers against tool shadowing and indirect prompt injection attacks."
 readme = "README.md"
 requires-python = ">=3.9"
