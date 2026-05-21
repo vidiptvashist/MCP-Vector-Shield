@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import logging
 from typing import List
+from mcp_vector_shield.verify import verify_tool_metadata
 
 # Pre-initialize environment thread patching for FAISS Apple Silicon optimization
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -36,17 +37,94 @@ async def connect_stdout() -> asyncio.StreamWriter:
     return writer
 
 
-async def pipe_stdin_to_sub(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+async def pipe_stdin_to_sub(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    main_stdout_writer: asyncio.StreamWriter,
+    blocked_tools: set,
+):
     """
-    Forwards stdin lines from the editor directly to the subprocess stdin.
+    Forwards stdin lines from the editor to the subprocess stdin, intercepting and blocking dangerous tools/call requests.
     """
     try:
         while True:
-            line = await reader.readline()
-            if not line:
+            line_bytes = await reader.readline()
+            if not line_bytes:
                 break
-            writer.write(line)
-            await writer.drain()
+
+            line_str = line_bytes.decode("utf-8", errors="ignore")
+            is_blocked = False
+            error_resp = None
+
+            # Intercept JSON-RPC call of tools/call
+            if '"method"' in line_str and '"tools/call"' in line_str:
+                try:
+                    data = json.loads(line_str.strip())
+                    if (
+                        isinstance(data, dict)
+                        and data.get("method") == "tools/call"
+                        and isinstance(data.get("params"), dict)
+                    ):
+                        tool_name = data["params"].get("name", "")
+
+                        # 1. Dynamic Check: Block if the tool was dynamically flagged during tools/list
+                        was_blocked_during_list = tool_name in blocked_tools
+
+                        # 2. Static Check: Block if the tool violates static naming rules (in case tools/list was skipped)
+                        is_static_unsafe = False
+                        unsafe_keywords = {
+                            "exec",
+                            "shell",
+                            "eval",
+                            "system",
+                            "run_cmd",
+                            "sh",
+                            "bash",
+                            "command",
+                        }
+                        normalized_name = tool_name.lower().replace("_", "").replace("-", "")
+                        for keyword in unsafe_keywords:
+                            if keyword in normalized_name:
+                                is_static_unsafe = True
+                                break
+
+                        # Check arguments keys for unsafe execution signatures
+                        args_dict = data["params"].get("arguments", {})
+                        if isinstance(args_dict, dict):
+                            unsafe_param_names = {"command", "cmd", "shell", "script", "code"}
+                            for arg_key in args_dict:
+                                if arg_key.lower() in unsafe_param_names:
+                                    is_static_unsafe = True
+                                    break
+
+                        if was_blocked_during_list or is_static_unsafe:
+                            threat_desc = (
+                                "Shadowed/Unsafe tool execution"
+                                if was_blocked_during_list
+                                else "Malicious static signatures"
+                            )
+                            logger.warning(
+                                f"🚨 [Security Alert] Blocked tools/call execution request for '{tool_name}' ({threat_desc})!"
+                            )
+                            is_blocked = True
+                            error_resp = {
+                                "jsonrpc": "2.0",
+                                "error": {
+                                    "code": -32000,
+                                    "message": f"Access Denied: Tool '{tool_name}' execution is blocked by security proxy ({threat_desc.lower()}).",
+                                },
+                                "id": data.get("id"),
+                            }
+                except Exception as ex:
+                    logger.debug(f"JSON-RPC call parse skip: {ex}")
+
+            if is_blocked and error_resp:
+                # Direct error response back to main stdout, bypassing subprocess
+                main_stdout_writer.write((json.dumps(error_resp) + "\n").encode("utf-8"))
+                await main_stdout_writer.drain()
+            else:
+                writer.write(line_bytes)
+                await writer.drain()
     except asyncio.CancelledError:
         pass
     except Exception as e:
@@ -64,6 +142,7 @@ async def pipe_sub_to_stdout(
     writer: asyncio.StreamWriter,
     registry,
     block_mode: bool,
+    blocked_tools: set,
 ):
     """
     Reads stdout lines from the subprocess, audits tools/list JSON-RPC payloads, and forwards safe streams back to the editor.
@@ -98,18 +177,25 @@ async def pipe_sub_to_stdout(
                                     or {},
                                 }
 
-                                if registry.is_shadowing_attack(tool_schema):
+                                is_malicious = not verify_tool_metadata(tool_schema)
+                                is_shadowed = registry.is_shadowing_attack(tool_schema)
+
+                                if is_malicious or is_shadowed:
+                                    threat_desc = (
+                                        "Shadowing attack" if is_shadowed else "Malicious metadata"
+                                    )
                                     logger.warning(
-                                        f"🚨 [Security Alert] Shadowing attack detected on tool '{tool.get('name')}'!"
+                                        f"🚨 [Security Alert] {threat_desc} detected on tool '{tool.get('name')}'!"
                                     )
                                     has_attack = True
+                                    blocked_tools.add(tool.get("name", ""))
                                     if block_mode:
                                         # Block mode: Return a JSON-RPC error instead of the tool list
                                         error_resp = {
                                             "jsonrpc": "2.0",
                                             "error": {
                                                 "code": -32000,
-                                                "message": f"Access Denied: Unsafe shadow tool '{tool.get('name')}' blocked.",
+                                                "message": f"Access Denied: Unsafe tool '{tool.get('name')}' blocked ({threat_desc.lower()}).",
                                             },
                                             "id": data.get("id"),
                                         }
@@ -161,10 +247,11 @@ async def run_proxy(
     threshold: float,
     block_mode: bool,
 ):
-    # 1. Initialize Semantic Registry
+    # 1. Initialize Semantic Registry and blocked tools tracker
     from mcp_vector_shield.mcp_registry import MCPSemanticRegistry
 
     registry = MCPSemanticRegistry(distance_threshold=threshold)
+    blocked_tools = set()
 
     # 2. Load and Register baseline tools
     if os.path.exists(baseline_path):
@@ -203,9 +290,11 @@ async def run_proxy(
     main_stdout_writer = await connect_stdout()
 
     # 5. Run Concurrent Pipe Workers
-    stdin_task = asyncio.create_task(pipe_stdin_to_sub(main_stdin_reader, proc.stdin))
+    stdin_task = asyncio.create_task(
+        pipe_stdin_to_sub(main_stdin_reader, proc.stdin, main_stdout_writer, blocked_tools)
+    )
     stdout_task = asyncio.create_task(
-        pipe_sub_to_stdout(proc.stdout, main_stdout_writer, registry, block_mode)
+        pipe_sub_to_stdout(proc.stdout, main_stdout_writer, registry, block_mode, blocked_tools)
     )
     stderr_task = asyncio.create_task(pipe_sub_stderr(proc.stderr))
 
