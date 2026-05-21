@@ -1,0 +1,12 @@
+include README.md
+include LICENSE
+recursive-include mcp_vector_shield *.py
+global-exclude *.json
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude .pytest_cache
+exclude fetch_*.py
+exclude run_*.py
+exclude generate_*.py
+exclude check.py
+recursive-exclude tests *
